@@ -1,0 +1,229 @@
+Build a complete, production-ready web application called "MLB Oracle" — a real-time MLB 
+tracking and home run prediction platform. Use Python (FastAPI backend), React (frontend), 
+PostgreSQL (database), Redis (caching/live updates), and APScheduler (scheduled tasks). 
+The app must run fully in Docker Compose.
+
+=============================================================
+MODULE 1 — REAL-TIME GAME TRACKER (Live Dashboard)
+=============================================================
+
+Connect to the free public MLB Stats API ([statsapi.mlb.com](https://statsapi.mlb.com/api/v1/) with no 
+authentication required.
+
+Display three real-time panels, each clearly separated by GAME (show team names, score, 
+inning, game status for each game card):
+
+PANEL A — HOME RUNS (live, per game)
+- Player name, team, inning, pitch type, pitcher name
+- Exit velocity (mph), launch angle (°), projected distance (ft)
+- Home run type: solo / 2-run / 3-run / grand slam
+- Video highlight link if available (MLB Stats API provides it)
+
+PANEL B — HITS (live, per game)
+- Player name, team, hit type (single/double/triple), inning
+- Hard-hit indicator if exit velocity > 95 mph
+- Batting average on balls in play (BABIP) note
+
+PANEL C — STRIKEOUTS (live, per game)
+- Pitcher name and batter name, inning
+- Pitch that caused the K (slider, fastball, etc.)
+- Cumulative K count for the pitcher in that game
+
+Refresh all panels via WebSocket every 30 seconds automatically.
+Each game is displayed as its own collapsible card, sorted by game start time.
+
+=============================================================
+MODULE 2 — HOME RUN PREDICTION ENGINE
+=============================================================
+
+Every day at 10:00 PM ET (previous evening before game day), automatically run the 
+full prediction pipeline:
+
+STEP 1 — DATA COLLECTION (scrape/aggregate all public sources):
+
+a) MLB Stats API:
+   - Last 30 days batting stats per player (HR, AVG, OBP, SLG, OPS, ISO)
+   - vs Left/Right pitcher splits (last 30 days and season)
+   - Home/Away splits
+   - Hard-hit rate, barrel rate, average exit velocity, average launch angle
+   - Pull% / Center% / Oppo%
+   - Plate discipline: O-Swing%, Z-Contact%, SwStr%
+   - Park factor for today's stadium
+
+b) Rotowire.com ([rotowire.com](https://www.rotowire.com/baseball/)
+   - Scrape daily lineups page at 10 PM ET and re-scrape every hour until lock
+   - Scrape injury reports
+   - Scrape player news and notes
+   - Scrape pitcher vs batter matchup notes
+
+c) Weather data (use Open-Meteo API, free, no key needed):
+   - Wind speed and direction at game time for each stadium location
+   - Temperature (ball travels farther in heat)
+   - Humidity
+   - Compute "weather boost score": tailwind > 10mph to CF/RF = +15%, temp > 80°F = +5%
+
+d) Pitcher analysis (crucial for HR prediction):
+   - Starting pitcher HR/9, HR/FB%, FB%, hard-hit % allowed
+   - Last 3 starts ERA and HR allowed
+   - Today's pitch count limit / days rest
+   - Bullpen usage and fatigue (if starter exits early, who comes in)
+
+e) Ballpark factors:
+   - Hard-code or fetch park HR factor for all 30 MLB stadiums
+   - Apply left/right field factor per batter handedness
+
+STEP 2 — PREDICTION MODEL (replicate logic from top platforms):
+
+Apply a weighted composite score model, inspired by:
+- rudebet.com style (matchup + recent form + park)
+- PropsMadness style (player prop market implied probability)
+- EVAnalytics style (expected value from Statcast data)
+- BettingPros style (consensus line movement + sharp money signal)
+- OddsTrader style (best available odds aggregation)
+- Yahoo Sports style (season-long power hitter ranking)
+- props.cash style (value plays vs public line)
+- HomeRunForecast.com style (pure Statcast + pitcher HR vulnerability)
+
+COMPOSITE SCORE FORMULA (0–100 scale):
+
+score = (
+  0.20 * recent_form_score        # HR in last 10 games, hot streak bonus
+  + 0.18 * statcast_score         # barrel%, exit velo, launch angle
+  + 0.15 * pitcher_vulnerability  # pitcher HR/9, HR/FB%, days rest
+  + 0.12 * matchup_splits         # batter vs pitcher handedness last 30d
+  + 0.10 * park_factor            # stadium HR index, left/right
+  + 0.08 * weather_score          # wind, temp boost
+  + 0.07 * lineup_position        # cleanup hitters score higher
+  + 0.05 * platoon_advantage      # L vs R or R vs L bonus
+  + 0.05 * season_power_rank      # ISO, SLG rank league-wide
+)
+
+Add bonus modifiers:
+  + 5 points if player has HR in 2+ of last 3 games
+  + 5 points if pitcher has allowed HR in each of last 3 starts
+  - 10 points if player is listed as "questionable" or "day-to-day"
+  - 15 points if player is confirmed OUT
+
+STEP 3 — OUTPUT:
+
+Generate two ranked lists:
+  TOP 10 BEST HOME RUN PICKS OF THE DAY (highest score)
+  TOP 10 MOST DIFFICULT / FADE PICKS (lowest score among regulars)
+
+For each player in both lists, display:
+  - Composite score (0–100)
+  - Individual breakdown of each factor score
+  - Recommended bet confidence: LOW / MEDIUM / HIGH / ELITE
+  - Best available odds (scrape from OddsTrader public page or display placeholder)
+  - One-line AI-generated justification (e.g. "Ohtani faces HR-prone LHP with tailwind at 
+    Coors Field, elite barrel rate last 14 days")
+
+=============================================================
+MODULE 3 — AUTO-UPDATE ENGINE
+=============================================================
+
+Every 60 minutes throughout the day (starting at 6 AM ET), automatically re-run partial 
+updates and adjust scores if:
+  - Lineup changes detected on Rotowire
+  - Injury news added for a predicted player
+  - Weather forecast update changes wind/temp significantly (> 5mph or > 5°F)
+  - Pitcher scratch or change announced
+  - Betting line moves more than 0.5 units (sharp signal)
+
+Show a visible "Last Updated" timestamp on the prediction panel.
+Show a changelog log of what changed and why the score moved (e.g. 
+"Score updated: +8 — Pitcher scratched, replaced by HR-prone bullpen arm").
+
+=============================================================
+MODULE 4 — NIGHTLY RESULTS ARCHIVE (2 AM GMT daily)
+=============================================================
+
+Every day at 2:00 AM GMT, automatically:
+
+1. Fetch final game results from MLB Stats API
+2. Save to PostgreSQL database:
+   - All home runs hit (player, team, pitcher, exit velo, distance, inning)
+   - All hits (player, type, team)
+   - All strikeouts (pitcher, batter, pitch type)
+   - Final scores for all games
+   - Weather conditions at game time
+
+3. Compare predictions vs reality:
+   - Mark each TOP 10 pick as HIT ✅ or MISS ❌
+   - Calculate daily accuracy rate (%)
+   - Update cumulative model accuracy tracker
+
+4. Display a "Yesterday's Results" page with:
+   - Full game summaries
+   - All HRs, hits, Ks in a clean table
+   - Prediction scorecard (how many of our picks hit)
+   - Season-to-date model accuracy chart (line graph)
+
+=============================================================
+MODULE 5 — UI/UX REQUIREMENTS
+=============================================================
+
+- Dark theme, MLB-inspired color palette (navy, red, white)
+- Fully responsive (desktop + tablet + mobile)
+- Left sidebar navigation: Live Tracker | Today's Picks | Results Archive | Model Stats
+- Top bar: current date, games today count, live game indicator (blinking green dot)
+- Toast notifications when a home run is hit live
+- Prediction cards use color coding:
+    ELITE (80–100): gold border
+    HIGH (65–79): green border
+    MEDIUM (50–64): blue border
+    LOW (<50): gray border
+- Results archive has date picker to browse any past date
+- Export button: download today's picks or any archive date as CSV or PDF
+
+=============================================================
+MODULE 6 — TECHNICAL STACK & ARCHITECTURE
+=============================================================
+
+Backend:
+  - FastAPI (Python 3.11+)
+  - PostgreSQL 15 (persistent storage)
+  - Redis 7 (WebSocket pub/sub + caching)
+  - APScheduler (all scheduled tasks)
+  - BeautifulSoup4 + httpx (web scraping)
+  - Pandas + NumPy (stat calculations)
+  - Pydantic v2 (data validation)
+
+Frontend:
+  - React 18 + TypeScript
+  - TailwindCSS (styling)
+  - Recharts (charts and graphs)
+  - Socket.IO client (real-time WebSocket)
+  - React Query (data fetching + caching)
+
+Infrastructure:
+  - Docker Compose with 4 services: api, frontend, postgres, redis
+  - .env file for all configurable parameters
+  - Automatic DB migrations with Alembic
+  - Logging to file + console (structured JSON logs)
+
+=============================================================
+MODULE 7 — ERROR HANDLING & RESILIENCE
+=============================================================
+
+- If Rotowire scraping fails: retry 3x with exponential backoff, then use last 
+  known lineup and flag as "UNCONFIRMED LINEUP" in yellow
+- If MLB API is down: use cached Redis data, show "Using cached data" banner
+- If weather API fails: skip weather modifier and note it
+- All scrapers must use rotating user-agent headers to avoid blocks
+- Respect robots.txt where required; all public data only
+
+=============================================================
+START WITH:
+=============================================================
+
+1. Set up Docker Compose with all 4 services
+2. Create database schema and all models
+3. Build MLB Stats API connector and test with today's games
+4. Build the live game tracker (Module 1) first and confirm it works
+5. Then build the prediction engine (Module 2)
+6. Then the scheduler (Module 3 + 4)
+7. Finally the full React UI (Module 5)
+
+Test each module before moving to the next.
+At the end, provide a README.md with setup instructions and how to run locally.
